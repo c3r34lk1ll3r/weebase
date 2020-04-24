@@ -40,7 +40,12 @@ def start_reading(data, command, return_code, out, err):
     global status
     if id not in status.private_chans:
         status.open_conv_id(j['msg'])
-    weechat.prnt_date_tags(status.private_chans[id], date,"notify_highlight", body)
+    username = body.split('/t')
+    priority = "notify_private"
+    if len(username) == 2:
+        if status.nick_name in username[1]:
+            priority = "notify_highlight"
+    weechat.prnt_date_tags(status.private_chans[id], date,priority, body)
     #notify_none Buffer with line is not added to hotlist.
     #notify_message Buffer with line is added to hotlist with level "message".
     #notify_private Buffer with line is added to hotlist with level "private".
