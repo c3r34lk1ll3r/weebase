@@ -2,7 +2,7 @@ import weechat
 import subprocess
 import json
 import socket 
-
+import tempfile
 def private_input_cb(data, buffer, input_data):
     ## I need to echo out the data
     global status
@@ -46,6 +46,9 @@ def start_reading(data, command, return_code, out, err):
         if status.nick_name in username[1]:
             priority = "notify_highlight"
     weechat.prnt_date_tags(status.private_chans[id], date,priority, body)
+    if debug:
+        body = weechat.color('/darkgray')+"DEBUG\t"+weechat.color('/darkgray')+str(j)
+        weechat.prnt_date_tags(status.private_chans[id], date,"notify_none", body)
     #notify_none Buffer with line is not added to hotlist.
     #notify_message Buffer with line is added to hotlist with level "message".
     #notify_private Buffer with line is added to hotlist with level "private".
@@ -79,6 +82,7 @@ def handle_system_message(msg):
     else:
         body+=weechat.color("red")+"type not supported. Raw message:"+str(msg)
     return body
+
 def handle_message(msg):
     sender = msg['sender']['username']
     date = msg['sent_at']
@@ -89,11 +93,36 @@ def handle_message(msg):
         body = handle_system_message(msg)
     elif content == 'text':
         body = sender+'\t'+msg['content']['text']['body']
+    elif content == 'attachment':
+        msg_id = msg['id']
+        body = sender+"\t"+weechat.color("_lightgreen")+"sent an attachment. Use /download "+str(msg_id)+" <output>"
     else:
-        body = str(msg)
+        body = weechat.color("*red")+str(msg)
     n    = int(msg['id'])
     return date,body,n
- 
+
+def open_attachment(data, buffer, arg):
+    if arg == "":
+        return weechat.WEECHAT_RC_ERROR
+    conv_id = weechat.buffer_get_string(buffer, "localvar_conversation_id")
+    tmp_file = tempfile.mkstemp(suffix = '.ktmp')
+    weechat.prnt("", str(tmp_file))
+    api = {"method": "download", "params": {"options": {"conversation_id": conv_id, "message_id": int(arg), "output": tmp_file[1]}}}
+    ## CHECK r
+    r=status.execute_api(api)
+    subprocess.Popen(['xdg-open',tmp_file[1]],close_fds=True)
+    return weechat.WEECHAT_RC_OK
+
+
+def download_message(data, buffer, arg):
+    args = arg.split(' ')
+    if len(args) != 2:
+        return weechat.WEECHAT_RC_ERROR
+    conv_id = weechat.buffer_get_string(buffer, "localvar_conversation_id")
+    api = {"method": "download", "params": {"options": {"conversation_id": conv_id, "message_id": int(args[0]), "output": args[1]}}}
+    ## CHECK r
+    r=status.execute_api(api)
+    return weechat.WEECHAT_RC_OK
 class status_server:
     def __init__(self):
         self.status_name = "keybase"
@@ -108,6 +137,8 @@ class status_server:
         weechat.prnt("", "readed history")
         self.reader = weechat.hook_process_hashtable("keybase chat api-listen",
                                                     {"buffer_flush":"1"},0,"start_reading","")
+        weechat.hook_command("download", "Download an attachment", "<msg_id> <outputh_path>", "<msg_id>: ID of the message\n<output_path>: Path to store file", "", "download_message", "") 
+        weechat.hook_command("open", "Open (with default application) an attachment", "<msg_id>", "<msg_id>: ID of the message\n", "", "open_attachment", "") 
     def execute_api(self, api):
         output = subprocess.check_output(['keybase', 'chat', 'api', '-m', json.dumps(api)])
         #weechat.prnt("", "D "+str(output))
@@ -132,12 +163,15 @@ class status_server:
             for i in result['messages']:
                 date, body, n = handle_message(i['msg'])
                 weechat.prnt("", str(mss))
-                mss[n] = [date, body]
+                mss[n] = [date, body, i]
             i = 0
             while i <= num:
                 msg = mss[i]
                 if msg != None:
                     weechat.prnt_date_tags(self.private_chans[id], msg[0],"", msg[1])
+                    if debug:
+                        body = weechat.color('/darkgray')+"DEBUG\t"+weechat.color('/darkgray')+str(msg[2])
+                        weechat.prnt_date_tags(self.private_chans[id], msg[0],"notify_none", body)
                 i+=1
     def open_conv_id(self,msg):
         conv_id = msg['conversaion_id']
@@ -152,21 +186,6 @@ class status_server:
         for chat in chats:
             buff = self.create_new_buffer(chat, chat['id'])
             self.private_chans[chat['id']] = buff
-            #name = chat['channel']['name']
-            #id   = chat['id']
-            #if self.nick_name in name:
-            #    ## Private conversation
-            #    if len(name.split(',')) == 1:
-            #        b_name = name
-            #    else:
-            #        b_name = ",".join(name.split(',')[1:])
-            #    buff = weechat.buffer_new(b_name, "private_input_cb", id, "private_close_cb", id)
-            #    self.private_chans[id] = buff
-            #    weechat.buffer_set(buff, "localvar_set_type", "private")
-            #    weechat.buffer_set(buff, "localvar_set_server", "keybase")
-            #    ## We will change this later TODO backlog
-            #    weechat.buffer_set(buff, "localvar_set_no_log", "1")
-            #    weechat.prnt(self.status, "Created new private channel between \'"+self.nick_name +"\' and \'"+b_name+"\'") 
             #else:
             #    #if name not in self.team_chans:
             #    #    weechat.prnt(self.status, "New team detected: create a status_buffer for " +name)
@@ -201,6 +220,7 @@ class status_server:
         weechat.buffer_set(buff, "localvar_set_type", "private")
         weechat.buffer_set(buff, "localvar_set_server", "keybase")
         weechat.buffer_set(buff, "localvar_set_no_log", "1")         
+        weechat.buffer_set(buff, "localvar_set_conversation_id", conv_id)
         weechat.buffer_set(buff, "unread", "")
         weechat.buffer_set(buff, "notify", "3")
         return buff 
@@ -209,5 +229,7 @@ class status_server:
 if __name__ == "__main__":
     weechat.register("keybase", "c3r34lk1ll3r", "0.0", "GPL3", "Keybase plugin", "", "")
     global status 
+    global debug
+    debug = True
     status = status_server()
 # }}} 
