@@ -1,4 +1,4 @@
-⚠️ *_In heavy development. No support provided. There is an high change that this will crash weechat and/or it doesn't work_* ⚠️
+⚠️ *_In heavy development. No support provided. There is an high chance that this will crash weechat and/or it doesn't work_* ⚠️
 
 # Wee_keybase
 Plugin for integrate _keybase_ in _weechat_.
