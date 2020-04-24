@@ -53,13 +53,41 @@ def start_reading(data, command, return_code, out, err):
     #weechat.prnt("","err:"+str(err))
     return weechat.WEECHAT_RC_OK
 
+def handle_system_message(msg):
+    system = msg['content']['system']
+    body = weechat.color("/cyan")+"SYSTEM\t"
+    if system['systemType'] == 0:
+        ## someone added someone to chat
+        addedtoteam = system['addedtoteam']
+        adder = addedtoteam['adder']
+        addee = addedtoteam['addee']
+        role  = addedtoteam['role']
+        bulkAdds = addedtoteam['bulkAdds']
+        body = weechat.color("/cyan")+adder+" added \'"+addee+"\' to team with role "+str(role)
+    elif system['systemType'] == 7:
+        ## Bulk add
+        bulkaddtoconv = system['bulkaddtoconv']
+        username = bulkaddtoconv['usernames']
+        users = (",").join(username[:])
+        body = weechat.prefix("join") +users+ " have joined the channel" 
+    elif system['systemType'] == 9:
+        ## Creation of a new channel
+        new_channel = system['newchannel']
+        creator = new_channel['creator']
+        name_channel = new_channel['nameAtCreation']
+        body+=weechat.color("/cyan")+creator+" created \'"+name_channel+"\' channel"
+    else:
+        body+=weechat.color("red")+"type not supported. Raw message:"+str(msg)
+    return body
 def handle_message(msg):
     sender = msg['sender']['username']
     date = msg['sent_at']
     content = msg['content']['type']
     if content == 'join':
-        body = weechat.prefix ("join")+sender+" has joined the channel"
-    elif 'text' in msg['content']:
+        body = weechat.prefix("join")+sender+" has joined the channel"
+    elif content == 'system':
+        body = handle_system_message(msg)
+    elif content == 'text':
         body = sender+'\t'+msg['content']['text']['body']
     else:
         body = str(msg)
@@ -176,6 +204,7 @@ class status_server:
         weechat.buffer_set(buff, "unread", "")
         weechat.buffer_set(buff, "notify", "3")
         return buff 
+
 # =================================[ Main ]================================== {{{
 if __name__ == "__main__":
     weechat.register("keybase", "c3r34lk1ll3r", "0.0", "GPL3", "Keybase plugin", "", "")
