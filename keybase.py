@@ -3,6 +3,10 @@ import subprocess
 import json
 import socket 
 import tempfile
+
+
+# =================================[ Callback functions ]================================== {{{
+
 def private_input_cb(data, buffer, input_data):
     ## I need to echo out the data
     global status
@@ -83,19 +87,43 @@ def handle_system_message(msg):
         body+=weechat.color("red")+"type not supported. Raw message:"+str(msg)
     return body
 
+def add_reaction(msg, buffer):
+    #hdata = weechat.hdata_get("b
+    pass
+
+#    {"method": "mark", "params": {"options": {"channel": {"name": "you,them"}, "message_id": 72}}} mark the message read.. we can use when we switch buffer
+# If it from history we can skip the delete and modify messages
 def handle_message(msg):
     sender = msg['sender']['username']
     date = msg['sent_at']
     content = msg['content']['type']
+    id = msg['id']
+    sender = sender+weechat.color("/lightmagenta")+" ["+str(id)+"]"
     if content == 'join':
         body = weechat.prefix("join")+sender+" has joined the channel"
     elif content == 'system':
         body = handle_system_message(msg)
     elif content == 'text':
-        body = sender+'\t'+msg['content']['text']['body']
+        text = msg['content']['text']
+        msg_body = text['body'].replace('\t',"    ")
+        ## Mention username
+        user_mention =  text['userMentions']
+        if user_mention != None:
+            for user in user_mention:
+                msg_body = msg_body.replace('@'+user['text'],weechat.color("*red")+'@'+user['text']+weechat.color("reset"))
+                #if user['text'] == self.nick --> PRIORITY
+        body = sender+'\t'+msg_body
+    #elif content == 'unfurl':
+    #    body = sender+'\t'+
+    elif content == 'delete':
+        body = sender+'\t'+weechat.color("*red")+"deleted message(s) "+str(msg['content']['delete']['messageIDs'])
+    elif content == 'edit':
+        edit = msg['content']['edit']
+        body = sender+'\t'+weechat.color("*red")+"edit message "+str(edit['messageID'])+" with:"+edit['body']
+    elif content == 'metadata':
+        body = sender+'\t'+"Metadata: Conversation Title: "+msg['content']['metadata']['conversationTitle']
     elif content == 'attachment':
-        msg_id = msg['id']
-        body = sender+"\t"+weechat.color("_lightgreen")+"sent an attachment. Use /download "+str(msg_id)+" <output>"
+        body = sender+"\t"+weechat.color("_lightgreen")+"sent an attachment. Use /download "+str(id)+" <output>"
     else:
         body = weechat.color("*red")+str(msg)
     n    = int(msg['id'])
@@ -123,10 +151,30 @@ def download_message(data, buffer, arg):
     ## CHECK r
     r=status.execute_api(api)
     return weechat.WEECHAT_RC_OK
+
+# {"method": "send", "params": {"options": {"channel": {"name": "you,them"}, "message": {"body": "is it cold today?"}}}}
+def send_new_message(data, buffer, command):
+    args = command.split(' ')
+    weechat.prnt("", str(args))
+    if len(args) < 3:
+        return weechat.WEECHAT_RC_ERROR
+    receiver = args[1]
+    body = "".join(args[2:])
+    api = {"method": "send", "params": {"options": {"channel": {"name": status.nick_name+','+receiver}, "message": {"body": body}}}}
+    r = status.execute_api(api)
+    ## I should also search the right buffer but I receive the message so the buffer is created after
+    return weechat.WEECHAT_RC_OK_EAT
+
+# }}}
+
+# =================================[ Server connection ]================================== {{{
+
 class status_server:
-    def __init__(self):
-        self.status_name = "keybase"
-        self.nick_name   = "c3r34lk1ll3r"
+    def __init__(self, options):
+        self.status_name = options['server_name']
+        self.nick_name   = options['nickname']
+        global debug
+        debug = options['debug']
         self.private_chans = {}
         #self.team_chans    = {}
         self.status = weechat.buffer_new(self.status_name, "status_input_cb", "", "status_close_cb", "")
@@ -139,6 +187,8 @@ class status_server:
                                                     {"buffer_flush":"1"},0,"start_reading","")
         weechat.hook_command("download", "Download an attachment", "<msg_id> <outputh_path>", "<msg_id>: ID of the message\n<output_path>: Path to store file", "", "download_message", "") 
         weechat.hook_command("open", "Open (with default application) an attachment", "<msg_id>", "<msg_id>: ID of the message\n", "", "open_attachment", "") 
+        ## Hooking to classic weechat command
+        weechat.hook_command_run("/msg","send_new_message","") 
     def execute_api(self, api):
         output = subprocess.check_output(['keybase', 'chat', 'api', '-m', json.dumps(api)])
         #weechat.prnt("", "D "+str(output))
@@ -157,12 +207,11 @@ class status_server:
         for id in conv_id:
             api['params']['options']['conversation_id']=id
             result = self.execute_api(api)
-            weechat.prnt(self.status, "History: "+str(result))
+            #weechat.prnt(self.status, "History: "+str(result))
             num = int(result['pagination']['num'])
             mss = [None] * (num+1)
             for i in result['messages']:
                 date, body, n = handle_message(i['msg'])
-                weechat.prnt("", str(mss))
                 mss[n] = [date, body, i]
             i = 0
             while i <= num:
@@ -200,6 +249,7 @@ class status_server:
             #    weechat.buffer_set(buff, "localvar_set_server", "keybase")
             #    weechat.buffer_set(buff, "localvar_set_no_log", "1")
             ##weechat.hook_signal_send("logger_backlog", weechat.WEECHAT_HOOK_SIGNAL_POINTER, buff)
+
     def create_new_buffer(self, msg, conv_id):
         channel = msg['channel']
         name = channel['name']
@@ -224,12 +274,27 @@ class status_server:
         weechat.buffer_set(buff, "unread", "")
         weechat.buffer_set(buff, "notify", "3")
         return buff 
+# }}}
 
 # =================================[ Main ]================================== {{{
 if __name__ == "__main__":
-    weechat.register("keybase", "c3r34lk1ll3r", "0.0", "GPL3", "Keybase plugin", "", "")
+    weechat.register("weebase", "c3r34lk1ll3r", "0.0", "GPL3", "Keybase plugin", "", "")
+    script_options = {
+    "nickname": "",
+    "debug": "False",
+    "server_name": "KeyBase",
+    }
+    for option, default_value in script_options.items():
+        if not weechat.config_is_set_plugin(option):
+            weechat.config_set_plugin(option, default_value)
+    PREFIX = "plugins.var.python.weebase."
+    script_options['nickname'] = weechat.config_string(weechat.config_get(PREFIX+"nickname"))
+    script_options['server_name'] = weechat.config_string(weechat.config_get(PREFIX+"server_name"))
+    script_options['debug'] = weechat.config_boolean(weechat.config_get(PREFIX+"debug"))
     global status 
-    global debug
-    debug = True
-    status = status_server()
+    weechat.prnt("", script_options['nickname'])
+    if script_options['nickname'] == "":
+        weechat.prnt("", weechat.prefix("error")+"you should set nickname first!")    
+    else:
+        status = status_server(script_options)
 # }}} 
