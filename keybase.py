@@ -13,15 +13,16 @@ def private_input_cb(data, buffer, input_data):
     api = {"method": "send", "params": {"options": {"conversation_id": data, "message": {"body": input_data}}}}
     #echo = status.nick_name+'\t'+input_data
     #weechat.prnt_date_tags(buffer, 0, "", echo) 
-    ## And then, i need to send it
+    # And then, i need to send it
     r=status.execute_api(api)
     ## CHECK r. Moreover, we can trigger the execution in another thread
     return weechat.WEECHAT_RC_OK
 
 def private_close_cb(data, buffer):
-    global server
+    global status
     del status.private_chans[data]
     return weechat.WEECHAT_RC_OK
+
 ## Todo wrapper 
 def status_input_cb(data, buffer, input_data):
     weechat.prnt("", str(data) + str(input_data))
@@ -39,6 +40,8 @@ def start_reading(data, command, return_code, out, err):
     if out == "":
         return weechat.WEECHAT_RC_OK
     j = json.loads(out)
+    if j['type'] != 'chat':
+        weechat.prnt_date_tags("", "","", str(j))
     id = j['msg']['conversation_id']
     date,body,n = handle_message(j['msg'])
     global status
@@ -71,8 +74,13 @@ def handle_system_message(msg):
         role  = addedtoteam['role']
         bulkAdds = addedtoteam['bulkAdds']
         body = weechat.color("/cyan")+adder+" added \'"+addee+"\' to team with role "+str(role)
+    elif system['systemType'] == 3:
+        # Creation of new team
+        team_name = system['createteam']['team']
+        creator   = system['createteam']['creator']
+        body += weechat.color("/cyan")+creator+" created \'"+team_name+"\' team"
     elif system['systemType'] == 7:
-        ## Bulk add
+        # Bulk add
         bulkaddtoconv = system['bulkaddtoconv']
         username = bulkaddtoconv['usernames']
         users = (",").join(username[:])
@@ -91,13 +99,16 @@ def add_reaction(msg, buffer):
     #hdata = weechat.hdata_get("b
     pass
 
-#    {"method": "mark", "params": {"options": {"channel": {"name": "you,them"}, "message_id": 72}}} mark the message read.. we can use when we switch buffer
+#{"method": "mark", "params": {"options": {"channel": {"name": "you,them"}, "message_id": 72}}} mark the message read.. we can use when we switch buffer
 # If it from history we can skip the delete and modify messages
 def handle_message(msg):
     sender = msg['sender']['username']
     date = msg['sent_at']
     content = msg['content']['type']
     id = msg['id']
+    #global status
+    #if sender == status.nick_name:
+    #    sender = weechat.color("lightgreen")
     sender = sender+weechat.color("/lightmagenta")+" ["+str(id)+"]"
     if content == 'join':
         body = weechat.prefix("join")+sender+" has joined the channel"
@@ -119,11 +130,13 @@ def handle_message(msg):
         body = sender+'\t'+weechat.color("*red")+"deleted message(s) "+str(msg['content']['delete']['messageIDs'])
     elif content == 'edit':
         edit = msg['content']['edit']
-        body = sender+'\t'+weechat.color("*red")+"edit message "+str(edit['messageID'])+" with:"+edit['body']
+        body = sender+'\t'+weechat.color("*red")+"edit message "+str(edit['messageID'])+" with: \'"+edit['body']+"\'"
     elif content == 'metadata':
         body = sender+'\t'+"Metadata: Conversation Title: "+msg['content']['metadata']['conversationTitle']
     elif content == 'attachment':
         body = sender+"\t"+weechat.color("_lightgreen")+"sent an attachment. Use /download "+str(id)+" <output>"
+    #elif content == 'pin':
+    #    body = sender+'\t'+weechat.color("_lightgreen")+"has pinned message "+str(id)
     else:
         body = weechat.color("*red")+str(msg)
     n    = int(msg['id'])
@@ -174,7 +187,10 @@ class status_server:
         self.status_name = options['server_name']
         self.nick_name   = options['nickname']
         global debug
-        debug = options['debug']
+        if options['debug'] == "true":
+            debug = True
+        else:
+            debug = False
         self.private_chans = {}
         #self.team_chans    = {}
         self.status = weechat.buffer_new(self.status_name, "status_input_cb", "", "status_close_cb", "")
@@ -189,6 +205,7 @@ class status_server:
         weechat.hook_command("open", "Open (with default application) an attachment", "<msg_id>", "<msg_id>: ID of the message\n", "", "open_attachment", "") 
         ## Hooking to classic weechat command
         weechat.hook_command_run("/msg","send_new_message","") 
+
     def execute_api(self, api):
         output = subprocess.check_output(['keybase', 'chat', 'api', '-m', json.dumps(api)])
         #weechat.prnt("", "D "+str(output))
@@ -262,17 +279,43 @@ class status_server:
                 buff_name = name
             else:
                 buff_name = ",".join(name_splitted[1:])
+            ty="private"
         elif channel['members_type'] == 'team':
             buff_name = "#"+channel['topic_name']
+            ty="channel"
         else:
-            buff_name ="BOH!"+channel['member_type']
+            buff_name ="un::"+channel['member_type']
+            ty="private"
         buff = weechat.buffer_new(buff_name, "private_input_cb", conv_id, "private_close_cb", conv_id)
-        weechat.buffer_set(buff, "localvar_set_type", "private")
-        weechat.buffer_set(buff, "localvar_set_server", "keybase")
+        weechat.buffer_set(buff, "localvar_set_type", ty)
+        weechat.buffer_set(buff, "localvar_set_server", self.status_name)
         weechat.buffer_set(buff, "localvar_set_no_log", "1")         
         weechat.buffer_set(buff, "localvar_set_conversation_id", conv_id)
         weechat.buffer_set(buff, "unread", "")
         weechat.buffer_set(buff, "notify", "3")
+        weechat.buffer_set(buff, "nicklist", "1")
+        # Get channel member
+        api = {"method": "listmembers", "params": {"options": {"conversation_id": conv_id}}} 
+        r=self.execute_api(api)
+        nicklist = ["0|Owners", "1|Admins", "2|Writers", "3|Readers", "4|Bot", "5|Restricted Bot"]
+        group = [None]*6
+        j = 0
+        for i in nicklist:
+            group[int(j)] = weechat.nicklist_add_group(buff, "", i,"weechat.color.nicklist_group", 1)
+            j+=1
+        result = r
+        for i in result['owners']:
+            weechat.nicklist_add_nick(buff, group[0] , i['username'], weechat.color("red"), "@", "lightgreen", 1)
+        for i in result['admins']:
+            weechat.nicklist_add_nick(buff, group[1] , i['username'], weechat.color("red"), "@", "lightgreen", 1)
+        for i in result['writers']:
+            weechat.nicklist_add_nick(buff, group[2] , i['username'], weechat.color("red"), "@", "lightgreen", 1)       
+        for i in result['readers']:
+            weechat.nicklist_add_nick(buff, group[3] , i['username'], weechat.color("red"), "@", "lightgreen", 1)       
+        for i in result['bots']:
+            weechat.nicklist_add_nick(buff, group[4] , i['username'], weechat.color("red"), "@", "lightgreen", 1)
+        for i in result['restrictedBots']:
+            weechat.nicklist_add_nick(buff, group[5] , i['username'], weechat.color("red"), "@", "lightgreen", 1)
         return buff 
 # }}}
 
@@ -281,7 +324,7 @@ if __name__ == "__main__":
     weechat.register("weebase", "c3r34lk1ll3r", "0.0", "GPL3", "Keybase plugin", "", "")
     script_options = {
     "nickname": "",
-    "debug": "False",
+    "debug": "true",
     "server_name": "KeyBase",
     }
     for option, default_value in script_options.items():
@@ -290,8 +333,9 @@ if __name__ == "__main__":
     PREFIX = "plugins.var.python.weebase."
     script_options['nickname'] = weechat.config_string(weechat.config_get(PREFIX+"nickname"))
     script_options['server_name'] = weechat.config_string(weechat.config_get(PREFIX+"server_name"))
-    script_options['debug'] = weechat.config_boolean(weechat.config_get(PREFIX+"debug"))
+    script_options['debug'] = weechat.config_string(weechat.config_get(PREFIX+"debug"))
     global status 
+    #global colors_nick=[
     weechat.prnt("", script_options['nickname'])
     if script_options['nickname'] == "":
         weechat.prnt("", weechat.prefix("error")+"you should set nickname first!")    
