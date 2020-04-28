@@ -32,6 +32,7 @@ def status_close_cb(data, buffer):
     weechat.prnt("", str(data))
     return weechat.WEECHAT_RC_OK
 
+
 def start_reading(data, command, return_code, out, err):
     #weechat.prnt("","Command:"+str(command))
     ## Maybe we can check this to see if the program is crashed
@@ -179,6 +180,18 @@ def send_new_message(data, buffer, command):
     return weechat.WEECHAT_RC_OK_EAT
 
 # }}}
+# {"method": "send", "params": {"options": {"channel": {"name": "you,them"}, "message": {"body": "is it cold today?"}, "reply_to": 314}}}
+def reply_to_message(data, buffer,command):
+    args = command.split(' ')
+    weechat.prnt("", str(args))
+    if len(args) < 3:
+        return weechat.WEECHAT_RC_ERROR
+    reply_to = int(args[1])
+    body = "".join(args[2:])
+    conv_id = weechat.buffer_get_string(buffer, "localvar_conversation_id")
+    api = {"method": "send", "params": {"options": {"conversation_id": conv_id, "message": {"body": body}, "reply_to": reply_to}}}
+    r = status.execute_api(api)
+    return weechat.WEECHAT_RC_OK_EAT
 
 # =================================[ Server connection ]================================== {{{
 
@@ -205,7 +218,7 @@ class status_server:
         weechat.hook_command("open", "Open (with default application) an attachment", "<msg_id>", "<msg_id>: ID of the message\n", "", "open_attachment", "") 
         ## Hooking to classic weechat command
         weechat.hook_command_run("/msg","send_new_message","") 
-
+        weechat.hook_command_run("/reply", "reply_to_message", "")
     def execute_api(self, api):
         output = subprocess.check_output(['keybase', 'chat', 'api', '-m', json.dumps(api)])
         #weechat.prnt("", "D "+str(output))
@@ -305,17 +318,17 @@ class status_server:
             j+=1
         result = r
         for i in result['owners']:
-            weechat.nicklist_add_nick(buff, group[0] , i['username'], weechat.color("red"), "@", "lightgreen", 1)
+            weechat.nicklist_add_nick(buff, group[0] , i['username'], "red", "@", "lightgreen", 1)
         for i in result['admins']:
-            weechat.nicklist_add_nick(buff, group[1] , i['username'], weechat.color("red"), "@", "lightgreen", 1)
+            weechat.nicklist_add_nick(buff, group[1] , i['username'], "red", "@", "lightgreen", 1)
         for i in result['writers']:
-            weechat.nicklist_add_nick(buff, group[2] , i['username'], weechat.color("red"), "@", "lightgreen", 1)       
+            weechat.nicklist_add_nick(buff, group[2] , i['username'], "red", "@", "lightgreen", 1)       
         for i in result['readers']:
-            weechat.nicklist_add_nick(buff, group[3] , i['username'], weechat.color("red"), "@", "lightgreen", 1)       
+            weechat.nicklist_add_nick(buff, group[3] , i['username'], "red", "@", "lightgreen", 1)       
         for i in result['bots']:
-            weechat.nicklist_add_nick(buff, group[4] , i['username'], weechat.color("red"), "@", "lightgreen", 1)
+            weechat.nicklist_add_nick(buff, group[4] , i['username'], "red", "@", "lightgreen", 1)
         for i in result['restrictedBots']:
-            weechat.nicklist_add_nick(buff, group[5] , i['username'], weechat.color("red"), "@", "lightgreen", 1)
+            weechat.nicklist_add_nick(buff, group[5] , i['username'], "red", "@", "lightgreen", 1)
         return buff 
 # }}}
 
