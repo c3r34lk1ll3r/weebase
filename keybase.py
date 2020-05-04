@@ -173,7 +173,7 @@ def send_new_message(data, buffer, command):
     if len(args) < 3:
         return weechat.WEECHAT_RC_ERROR
     receiver = args[1]
-    body = "".join(args[2:])
+    body = " ".join(args[2:])
     api = {"method": "send", "params": {"options": {"channel": {"name": status.nick_name+','+receiver}, "message": {"body": body}}}}
     r = status.execute_api(api)
     ## I should also search the right buffer but I receive the message so the buffer is created after
