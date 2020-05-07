@@ -237,11 +237,21 @@ class status_server:
         for id in conv_id:
             api['params']['options']['conversation_id']=id
             result = self.execute_api(api)
+            weechat.prnt("", "Conv ID:"+id)
             #weechat.prnt(self.status, "History: "+str(result))
-            num = int(result['pagination']['num'])
+            if 'last' in result['pagination']:
+                num = int(result['pagination']['num'])
+            else:
+                num = 1000
             mss = [None] * (num+1)
+            weechat.prnt("",str(num))
+            ## We can get only 1000 messages... we need to do more calls
+            max = 1000
             for i in result['messages']:
                 date, body, n = handle_message(i['msg'])
+                if (num == 1000):
+                    n = max
+                    max-=1
                 mss[n] = [date, body, i]
             i = 0
             while i <= num:
