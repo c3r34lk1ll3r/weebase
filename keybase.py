@@ -3,7 +3,7 @@ import subprocess
 import json
 import socket 
 import tempfile
-
+import collections
 
 # =================================[ Callback functions ]================================== {{{
 
@@ -53,6 +53,11 @@ def start_reading(data, command, return_code, out, err):
     if len(username) == 2:
         if status.nick_name in username[1]:
             priority = "notify_highlight"
+    if weechat.buffer_get_string(status.private_chans[id], "localvar_first_message") == "":
+        r, f, l = status.get_last_history(id, priority)
+        weechat.buffer_set(status.private_chans[id], "localvar_set_first_message", str(f))
+        weechat.buffer_set(status.private_chans[id], "localvar_set_last_message", str(l))
+        return weechat.WEECHAT_RC_OK
     weechat.prnt_date_tags(status.private_chans[id], date,priority, body)
     if debug:
         body = weechat.color('/darkgray')+"DEBUG\t"+weechat.color('/darkgray')+str(j)
@@ -127,6 +132,8 @@ def handle_message(msg):
         body = sender+'\t'+msg_body
     #elif content == 'unfurl':
     #    body = sender+'\t'+
+    #elif content == 'reaction':
+    #    reaction = msg['content']['reaction'] 
     elif content == 'delete':
         body = sender+'\t'+weechat.color("*red")+"deleted message(s) "+str(msg['content']['delete']['messageIDs'])
     elif content == 'edit':
@@ -140,8 +147,7 @@ def handle_message(msg):
     #    body = sender+'\t'+weechat.color("_lightgreen")+"has pinned message "+str(id)
     else:
         body = weechat.color("*red")+str(msg)
-    n    = int(msg['id'])
-    return date,body,n
+    return date,body,msg['id']
 
 def open_attachment(data, buffer, arg):
     if arg == "":
@@ -193,8 +199,46 @@ def reply_to_message(data, buffer,command):
     r = status.execute_api(api)
     return weechat.WEECHAT_RC_OK_EAT
 
-# =================================[ Server connection ]================================== {{{
+def test12(data, buffer, arg):
+    own_lines= weechat.hdata_pointer(weechat.hdata_get("buffer"), buffer, 'own_lines')
+    #line = weechat.hdata_pointer(weechat.hdata_get("lines"), own_lines, "last_line")
+    #line_data = weechat.hdata_pointer(weechat.hdata_get("line"), line, "data")
+    #hdata = weechat.hdata_get("line_data")
+    #data = weechat.hdata_pointer(hdata.line, pointer, 'data')
+    weechat.prnt("",str(own_lines))
+    return weechat.WEECHAT_RC_OK
+def buffer_switched(data, signal, signal_data):
+    plugin = weechat.buffer_get_string(signal_data, "localvar_server")
+    if plugin != "KeyBase":
+        return weechat.WEECHAT_RC_OK
 
+    first_message = weechat.buffer_get_string(signal_data, "localvar_first_message")
+    conv_id = weechat.buffer_get_string(signal_data, "localvar_conversation_id")
+    if (first_message == ""):
+        weechat.prnt("", "Get history")
+        r, f, l = status.get_last_history(conv_id)
+        weechat.buffer_set(signal_data, "localvar_set_first_message", str(f))
+        weechat.buffer_set(signal_data, "localvar_set_last_message", str(l))
+        return weechat.WEECHAT_RC_OK_EAT
+    elif first_message != '1':
+        weechat.prnt("", "Retrieve others")
+    return weechat.WEECHAT_RC_OK_EAT
+def window_scrolled(data, signal, signal_data):
+    buffer = weechat.current_buffer()
+    weechat.prnt("", str(buffer))
+    plugin = weechat.buffer_get_string(buffer, "localvar_server")
+    weechat.prnt("", plugin)
+    if plugin != "KeyBase":
+        return weechat.WEECHAT_RC_OK
+    first_message = weechat.buffer_get_string(buffer, "localvar_first_message")
+    conv_id = weechat.buffer_get_string(buffer, "localvar_conversation_id")
+    weechat.prnt("", "first message "+first_message)
+    if first_message != "1":
+        weechat.prnt("", "retrieve message from "+str(first_message))
+        ids = list(range(int(first_message)-25,int(first_message)))
+        weechat.prnt("", str(ids))
+        status.retrieve_messages_ids(conv_id, ids)
+    return weechat.WEECHAT_RC_OK
 class status_server:
     def __init__(self, options):
         self.status_name = options['server_name']
@@ -205,13 +249,12 @@ class status_server:
         else:
             debug = False
         self.private_chans = {}
-        #self.team_chans    = {}
+        self.private_chans_ptr = {}
         self.status = weechat.buffer_new(self.status_name, "status_input_cb", "", "status_close_cb", "")
         weechat.buffer_set(self.status, "localvar_set_type", "server")
         weechat.buffer_set(self.status, "localvar_set_server", "keybase")
         self.init_chats()
-        self.get_history()
-        weechat.prnt("", "readed history")
+        #self.get_history()
         self.reader = weechat.hook_process_hashtable("keybase chat api-listen",
                                                     {"buffer_flush":"1"},0,"start_reading","")
         weechat.hook_command("download", "Download an attachment", "<msg_id> <outputh_path>", "<msg_id>: ID of the message\n<output_path>: Path to store file", "", "download_message", "") 
@@ -219,6 +262,11 @@ class status_server:
         ## Hooking to classic weechat command
         weechat.hook_command_run("/msg","send_new_message","") 
         weechat.hook_command_run("/reply", "reply_to_message", "")
+
+        weechat.hook_signal("buffer_switch", "buffer_switched", "")
+        weechat.hook_signal("window_scrolled", "window_scrolled", "")
+        weechat.hook_command("test", "", "", "", "", "test12", "")
+
     def execute_api(self, api):
         output = subprocess.check_output(['keybase', 'chat', 'api', '-m', json.dumps(api)])
         #weechat.prnt("", "D "+str(output))
@@ -229,45 +277,31 @@ class status_server:
             return None
         result = json.loads(output)['result']
         return result
-
-    def get_history(self, conv_id = []):
-        api = {"method": "read", "params": {"options": {"conversation_id": "" }}}
-        if len(conv_id) == 0:
-            conv_id = self.private_chans
-        for id in conv_id:
-            api['params']['options']['conversation_id']=id
-            result = self.execute_api(api)
-            weechat.prnt("", "Conv ID:"+id)
-            #weechat.prnt(self.status, "History: "+str(result))
-            if 'last' in result['pagination']:
-                num = int(result['pagination']['num'])
-            else:
-                num = 1000
-            mss = [None] * (num+1)
-            weechat.prnt("",str(num))
-            ## We can get only 1000 messages... we need to do more calls
-            max = 1000
-            for i in result['messages']:
-                date, body, n = handle_message(i['msg'])
-                if (num == 1000):
-                    n = max
-                    max-=1
-                mss[n] = [date, body, i]
-            i = 0
-            while i <= num:
-                msg = mss[i]
-                if msg != None:
-                    weechat.prnt_date_tags(self.private_chans[id], msg[0],"", msg[1])
-                    if debug:
-                        body = weechat.color('/darkgray')+"DEBUG\t"+weechat.color('/darkgray')+str(msg[2])
-                        weechat.prnt_date_tags(self.private_chans[id], msg[0],"notify_none", body)
-                i+=1
+    def get_last_history(self, conv_id, notify = ""):
+        api = {"method": "read", "params": {"options": {"conversation_id": conv_id }}}
+        result=self.execute_api(api)
+        mex = {}
+        for i in result['messages']:
+            date, body, n = handle_message(i['msg'])
+            mex[n] = [date, body]
+        od = collections.OrderedDict(sorted(mex.items()))
+        for n, b in od.items():
+            weechat.prnt_date_tags(self.private_chans[conv_id], b[0],notify ,b[1])
+        keys = list(od.keys())
+        return None, keys[0],keys[-1] 
+    def retrieve_messages_ids(self, conv_id, ids):
+        api = {"method": "get", "params": {"options": {"conversation_id": conv_id, "message_ids": ids}}}
+        r = self.execute_api(api)
+        weechat.prnt("",str(r))
+    def retrieve_nth_page(self, conv_id, num=1000, next="", prev=""):
+        api = {"method": "read", "params": {"options": {"conversation_id": conv_id , "pagination":{"num":num, "next":next, "previous":prev}}}}
+        result = self.execute_api(api)
+        return result
     def open_conv_id(self,msg):
         conv_id = msg['conversaion_id']
         buff = self.create_new_buffer(msg, conv_id)
         self.private_chans[conv_id] = buff
-        self.get_history(conv_id=[conv_id])
-
+        self.get_last_history(conv_id)
     def init_chats(self):
         api = {"method":"list"}
         results=self.execute_api(api)
@@ -275,20 +309,6 @@ class status_server:
         for chat in chats:
             buff = self.create_new_buffer(chat, chat['id'])
             self.private_chans[chat['id']] = buff
-            #else:
-            #    #if name not in self.team_chans:
-            #    #    weechat.prnt(self.status, "New team detected: create a status_buffer for " +name)
-            #    #    team_buf = weechat.buffer_new(name, "chan_input_cb", "", "chan_close_cb", "")
-            #    #    self.team_chans[name] = [team_buf]
-            #    #    weechat.buffer_set(team_buf, "localvar_set_type", "server")
-            #    #    weechat.buffer_set(team_buf, "localvar_set_server", name)
-            #    t_name = chat['channel']['topic_name']
-            #    buff = weechat.buffer_new(name+'#'+t_name, "private_input_cb", id, "private_close_cb", id)
-            #    self.private_chans[id] = buff
-            #    weechat.buffer_set(buff, "localvar_set_type", "private")
-            #    weechat.buffer_set(buff, "localvar_set_server", "keybase")
-            #    weechat.buffer_set(buff, "localvar_set_no_log", "1")
-            ##weechat.hook_signal_send("logger_backlog", weechat.WEECHAT_HOOK_SIGNAL_POINTER, buff)
 
     def create_new_buffer(self, msg, conv_id):
         channel = msg['channel']
@@ -304,18 +324,21 @@ class status_server:
                 buff_name = ",".join(name_splitted[1:])
             ty="private"
         elif channel['members_type'] == 'team':
-            buff_name = "#"+channel['topic_name']
+            buff_name = channel['name']+"#"+channel['topic_name']
             ty="channel"
         else:
             buff_name ="un::"+channel['member_type']
             ty="private"
         buff = weechat.buffer_new(buff_name, "private_input_cb", conv_id, "private_close_cb", conv_id)
+        weechat.prnt("", "buffer!"+str(buff));
         weechat.buffer_set(buff, "localvar_set_type", ty)
         weechat.buffer_set(buff, "localvar_set_server", self.status_name)
         weechat.buffer_set(buff, "localvar_set_no_log", "1")         
         weechat.buffer_set(buff, "localvar_set_conversation_id", conv_id)
+        weechat.buffer_set(buff, "localvar_set_first_message", "")
+        weechat.buffer_set(buff, "localvar_set_last_message", "")
         weechat.buffer_set(buff, "unread", "")
-        weechat.buffer_set(buff, "notify", "3")
+        weechat.buffer_set(buff, "notify", "2")
         weechat.buffer_set(buff, "nicklist", "1")
         # Get channel member
         api = {"method": "listmembers", "params": {"options": {"conversation_id": conv_id}}} 
@@ -344,7 +367,7 @@ class status_server:
 
 # =================================[ Main ]================================== {{{
 if __name__ == "__main__":
-    weechat.register("weebase", "c3r34lk1ll3r", "0.0", "GPL3", "Keybase plugin", "", "")
+    weechat.register("weebase", "c3r34lk1ll3r", "0.5", "GPL3", "Keybase plugin", "", "")
     script_options = {
     "nickname": "",
     "debug": "true",
