@@ -125,10 +125,13 @@ def handle_message(msg):
         msg_body = text['body'].replace('\t',"    ")
         ## Mention username
         user_mention =  text['userMentions']
+        reply_to = text['replyTo'] if 'replyTo' in text else None
         if user_mention != None:
             for user in user_mention:
                 msg_body = msg_body.replace('@'+user['text'],weechat.color("*red")+'@'+user['text']+weechat.color("reset"))
                 #if user['text'] == self.nick --> PRIORITY
+        if reply_to != None:
+            msg_body = weechat.color("*darkgray") + "reply to "+str(reply_to)+"-> "+weechat.color("reset") + msg_body
         body = sender+'\t'+msg_body
     #elif content == 'unfurl':
     #    body = sender+'\t'+
@@ -193,7 +196,7 @@ def reply_to_message(data, buffer,command):
     if len(args) < 3:
         return weechat.WEECHAT_RC_ERROR
     reply_to = int(args[1])
-    body = "".join(args[2:])
+    body = " ".join(args[2:])
     conv_id = weechat.buffer_get_string(buffer, "localvar_conversation_id")
     api = {"method": "send", "params": {"options": {"conversation_id": conv_id, "message": {"body": body}, "reply_to": reply_to}}}
     r = status.execute_api(api)
@@ -201,11 +204,12 @@ def reply_to_message(data, buffer,command):
 
 def test12(data, buffer, arg):
     own_lines= weechat.hdata_pointer(weechat.hdata_get("buffer"), buffer, 'own_lines')
-    #line = weechat.hdata_pointer(weechat.hdata_get("lines"), own_lines, "last_line")
-    #line_data = weechat.hdata_pointer(weechat.hdata_get("line"), line, "data")
-    #hdata = weechat.hdata_get("line_data")
-    #data = weechat.hdata_pointer(hdata.line, pointer, 'data')
-    weechat.prnt("",str(own_lines))
+    line = weechat.hdata_pointer(weechat.hdata_get('lines'), own_lines, 'last_line')
+    hdata_line_data = weechat.hdata_get('line_data')
+    hdata_line = weechat.hdata_get('line')
+    d = weechat.hdata_pointer(hdata_line, line, 'data')
+    weechat.prnt(buffer,weechat.hdata_string(hdata_line_data, d, 'message'))
+    weechat.prnt(buffer,weechat.hdata_string(hdata_line_data, d, 'prefix'))
     return weechat.WEECHAT_RC_OK
 def buffer_switched(data, signal, signal_data):
     plugin = weechat.buffer_get_string(signal_data, "localvar_server")
@@ -235,7 +239,7 @@ def window_scrolled(data, signal, signal_data):
     weechat.prnt("", "first message "+first_message)
     if first_message != "1":
         weechat.prnt("", "retrieve message from "+str(first_message))
-        ids = list(range(int(first_message)-25,int(first_message)))
+        ids = list(range(int(first_message)-25 if int(first_message)-25 > 0 else 0,int(first_message)))
         weechat.prnt("", str(ids))
         status.retrieve_messages_ids(conv_id, ids)
     return weechat.WEECHAT_RC_OK
@@ -298,7 +302,7 @@ class status_server:
         result = self.execute_api(api)
         return result
     def open_conv_id(self,msg):
-        conv_id = msg['conversaion_id']
+        conv_id = msg['conversation_id']
         buff = self.create_new_buffer(msg, conv_id)
         self.private_chans[conv_id] = buff
         self.get_last_history(conv_id)
